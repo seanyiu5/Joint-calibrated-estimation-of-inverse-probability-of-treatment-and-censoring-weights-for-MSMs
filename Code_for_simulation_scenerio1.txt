@@ -1,0 +1,347 @@
+
+
+##Data generating function
+
+DATA_GEN<-function(ns){  ##Generate Z
+Z1<-rnorm(11*ns,0,1)
+Z2<-rnorm(11*ns,0,1)
+Z3<-rnorm(11*ns,0,1)
+Z4<-rnorm(11*ns,0,1)
+
+A00<-rbinom(ns,1,0.5)     ##Generate initial treatment at random
+A10<-rbinom(ns,1,0.5)*A00  
+
+X1<-rep(0,11*ns)          ##Covariate vectors
+X2<-rep(0,11*ns)
+X3<-rep(0,11*ns)
+X4<-rep(0,11*ns)
+
+A0P<-rep(0,11*ns)        ##Previous and current treatment
+A1P<-rep(0,11*ns)
+A0<-rep(0,11*ns)
+A1<-rep(0,11*ns)
+CA0P<-rep(0,11*ns)   ##vector for sum of previous treatment A0, these are used to affect current covariates
+CA1P<-rep(0,11*ns)   ##vector for sum of previous treatment A1, these are used to affect current covariates
+
+Y<-rep(0,11*ns)     ##Outcome vector
+
+                    ##Fill in initial values
+seq1<-seq(1,11*ns-10,11)
+A0P[seq1]<-A00
+A1P[seq1]<-A10
+CA0P[seq1]<-A00
+CA1P[seq1]<-A10
+
+U<-rep(0,11*ns)     ##Define U in the simulation set-up
+U[seq1]<-1-0.3*A00+0.3*A10
+
+X1[seq1]<-U[seq1]*Z1[seq1]
+X2[seq1]<-U[seq1]*Z2[seq1]
+X3[seq1]<-Z3[seq1]+0.5*A00+0.5*A10
+X4[seq1]<-Z4[seq1]+0.5*A00+0.5*A10
+
+P0<-list()                                   ##list of treatment probabilities 
+P1<-list()
+seqlist<-list()                              
+seqlist[[1]]<-seq1
+
+for (k in 2:11){                             ##Generate Data
+
+P0[[k-1]]<-1/(1+exp(-A0P[seqlist[[k-1]]]-A1P[seqlist[[k-1]]]-0.5*X1[seqlist[[k-1]]]-0.5*X2[seqlist[[k-1]]]+0.2*X3[seqlist[[k-1]]]+
+0.2*X4[seqlist[[k-1]]]))
+
+A0[seqlist[[k-1]]]<-rbinom(ns,1,P0[[k-1]]) ##Generate treatment at current visit based on previous covariates
+
+P1[[k-1]]<-1/(1+exp(-A0P[seqlist[[k-1]]]-A1P[seqlist[[k-1]]]-0.5*X1[seqlist[[k-1]]]-0.5*X2[seqlist[[k-1]]]+0.2*X3[seqlist[[k-1]]]+
+0.2*X4[seqlist[[k-1]]]))
+
+A1[seqlist[[k-1]]]<-rbinom(ns,1,P1[[k-1]])*A0[seqlist[[k-1]]]
+
+##Update values
+
+seqlist[[k]]<-seqlist[[k-1]]+1
+
+A0P[seqlist[[k]]]<-A0[seqlist[[k-1]]]
+A1P[seqlist[[k]]]<-A1[seqlist[[k-1]]]
+CA0P[seqlist[[k]]]<-CA0P[seqlist[[k-1]]]+A0P[seqlist[[k]]]
+CA1P[seqlist[[k]]]<-CA1P[seqlist[[k-1]]]+A1P[seqlist[[k]]]
+
+U[seqlist[[k]]]<-1-0.3*A0P[seqlist[[k]]]-0.3*A1P[seqlist[[k]]] 
+
+X1[seqlist[[k]]]<-U[seqlist[[k]]]*Z1[seqlist[[k]]]
+X2[seqlist[[k]]]<-U[seqlist[[k]]]*Z2[seqlist[[k]]]
+X3[seqlist[[k]]]<-Z3[seqlist[[k]]]+0.5*CA0P[seqlist[[k]]]+0.5*CA1P[seqlist[[k]]]
+X4[seqlist[[k]]]<-Z4[seqlist[[k]]]+0.5*CA0P[seqlist[[k]]]+0.5*CA1P[seqlist[[k]]]
+
+lp<-A0[seqlist[[k-1]]]+A1[seqlist[[k-1]]]+X1[seqlist[[k]]]+X2[seqlist[[k]]]+X3[seqlist[[k]]]+X4[seqlist[[k]]]+
+X1[seqlist[[k-1]]]+X2[seqlist[[k-1]]]+X3[seqlist[[k-1]]]+X4[seqlist[[k-1]]]
+
+##Genrate outcome
+
+Y[seqlist[[k]]]<-200+5*lp+rnorm(ns,0,20)}
+
+##Make data frame
+
+ID<-rep(1:ns,each=10)
+
+##Align data by removing values 
+NSEQ<-seq(11,11*ns,11)
+
+X1<-X1[-NSEQ]
+X2<-X2[-NSEQ]
+X3<-X3[-NSEQ]
+X4<-X4[-NSEQ]
+A0P<-A0P[-NSEQ]
+A1P<-A1P[-NSEQ]
+A0<-A0[-NSEQ]
+A1<-A1[-NSEQ]
+
+Y<-Y[-seq(1,11*ns-10,11)]
+
+##Cumulative treatment effect
+
+CA0<-ave(A0,ID,FUN=cumsum)+rep(A00,each=10)
+
+CA1<-ave(A1,ID,FUN=cumsum)+rep(A10,each=10)
+
+##Define transform covariates
+
+TX1<-X1^3/9
+
+TX2<-X1*X2
+
+TX3<-log(abs(X3))+4
+
+TX4<-1/(1+exp(X4))
+
+##Create data frame
+
+DATA<-data.frame(ID,T=rep(c(1:10),ns),A0,A1,A0P,A1P,CA0,CA1,X1,X2,X3,X4,TX1,TX2,TX3,TX4,Y)
+
+DATA}
+
+######
+
+library(compiler)
+enableJIT(3)
+
+library(doParallel)
+registerDoParallel(3) 
+library(foreach)
+
+
+##################################
+####################
+
+RE<-foreach (i=1:2500,.packages=c('compiler','nleqslv')) %dopar% {
+enableJIT(3)
+
+DATA<-DATA_GEN(1000) ##generate simulated sample of 1000 units
+
+##MLE method
+
+Proj_A0<-glm(A0~A0P+A1P,data=DATA,binomial) ##fit numerator model for A0
+
+Prob_A0<-glm(A0~A0P+A1P+X1+X2+X3+X4,data=DATA,binomial)      ##fit denominator model for A0 with correct covariates
+Prob_A0T<-glm(A0~A0P+A1P+TX1+TX2+TX3+TX4,data=DATA,binomial) ##fit denominator model for A0 with transformed covariates
+
+weProj_A0<-fitted(Proj_A0)*DATA$A0+(1-DATA$A0)*(1-fitted(Proj_A0)) ##numerator of weight for A0
+
+weProb_A0<-fitted(Prob_A0)*DATA$A0+(1-DATA$A0)*(1-fitted(Prob_A0))    ##denominator of weight for A0 with correct covariates
+weProb_A0T<-fitted(Prob_A0T)*DATA$A0+(1-DATA$A0)*(1-fitted(Prob_A0T)) ##denominator of weight for A0 with transformed covariates
+
+indA1<-which(DATA$A0==1) ##indicator for those with A0=1
+
+Proj_A1<-glm(A1~A0P+A1P,data=DATA[indA1,],binomial) ##fit numerator model for A1
+
+Prob_A1<-glm(A1~A0P+A1P+X1+X2+X3+X4,data=DATA[indA1,],binomial)       ##fit denominator model for A1 with correct covariates
+Prob_A1T<-glm(A1~A0P+A1P+TX1+TX2+TX3+TX4,data=DATA[indA1,],binomial)  ##fit denominator model for A1 with transformed covariates
+
+weProj_A1<-rep(1,nrow(DATA))              
+weProj_A1[indA1]<-fitted(Proj_A1)*DATA$A1[indA1]+(1-DATA$A1[indA1])*(1-fitted(Proj_A1)) ##numerator of weight for A1
+
+weProb_A1<-rep(1,nrow(DATA))
+weProb_A1T<-rep(1,nrow(DATA))
+weProb_A1[indA1]<-fitted(Prob_A1)*DATA$A1[indA1]+(1-DATA$A1[indA1])*(1-fitted(Prob_A1))    ##denominator of weight for A1 with correct covariates
+weProb_A1T[indA1]<-fitted(Prob_A1T)*DATA$A1[indA1]+(1-DATA$A1[indA1])*(1-fitted(Prob_A1T)) ##denominator of weight for A1 with transformed covariates
+
+weightsMLEN<-weProj_A0*weProj_A1/(weProb_A0*weProb_A1)      ##MLE weights with correct covariates
+weightsMLENT<-weProj_A0*weProj_A1/(weProb_A0T*weProb_A1T)   ##MLE weights with transformed covariates
+
+weightsMLE<-ave(weightsMLEN,DATA$ID,FUN=cumprod)            ##MLE of cumulative weights with correct covariates 
+weightsMLET<-ave(weightsMLENT,DATA$ID,FUN=cumprod)          ##MLE of cumulative weights with transformed covariates
+
+
+WeightsMLE<-weightsMLE/mean(weightsMLE)                     ## Scaled weights with correct covariates
+WeightsMLET<-weightsMLET/mean(weightsMLET)                  ## Scaled weights with transformed covariates
+
+COEF_MLE<-lm(Y~CA0+CA1,data=DATA,weights=WeightsMLE)$coef[2:3]    ##Treatment effect with correct covariates
+COEF_MLET<-lm(Y~CA0+CA1,data=DATA,weights=WeightsMLET)$coef[2:3]  ##Treatment effect with transformed covariates
+
+
+###############################Calibration
+
+library(nleqslv)
+
+##construct restrictions (7) in the main text for the correct covariates
+##Construct restrictions for A0
+
+A0pi<-fitted(Proj_A0)
+
+A0kernal<-DATA$A0-A0pi
+
+DMAT<-cbind(rep(1,nrow(DATA)),DATA$X1,DATA$X2,DATA$X3,DATA$X4,DATA$A0P,DATA$A1P)
+
+DMATA0<-A0kernal*DMAT
+
+avecumsum<-function(n){ave(n,DATA$ID,FUN=cumsum)}
+
+DMATA0A<-apply(DMATA0,2,avecumsum) ##DMATA0A is a matrix containing the coefficients of the weights in the restrictions for A0
+
+
+##Construct restrictions for A1
+
+A1pi<-1/(1+exp(-Proj_A1$coef[1]-Proj_A1$coef[2]*DATA$A0P-Proj_A1$coef[3]*DATA$A1P))
+
+A1kernal<-DATA$A0*(DATA$A1-A1pi)
+
+DMATA1<-A1kernal*DMAT
+
+DMATA1A<-apply(DMATA1,2,avecumsum) ##DMATA1A is a matrix containing the coefficients of the weights in the restrictions for A1
+
+##Overall constraints
+
+DMATAO<-cbind(DMATA0A,DMATA1A)
+
+##Construct restrictions (7) in the main text for the transformed covariates
+
+DMATT<-cbind(rep(1,nrow(DATA)),DATA$TX1,DATA$TX2,DATA$TX3,DATA$TX4,DATA$A0P,DATA$A1P)
+
+DMATA0T<-A0kernal*DMATT
+
+DMATA0AT<-apply(DMATA0T,2,avecumsum)
+
+##
+
+DMATA1T<-A1kernal*DMATT
+
+DMATA1AT<-apply(DMATA1T,2,avecumsum)
+
+DMATAOT<-cbind(DMATA0AT,DMATA1AT)  
+
+
+##Construct restrictions (5) in the main text
+
+visit1<-as.numeric(DATA$T==1)
+visit2<-as.numeric(DATA$T==2)
+visit3<-as.numeric(DATA$T==3)
+visit4<-as.numeric(DATA$T==4)
+visit5<-as.numeric(DATA$T==5)
+visit6<-as.numeric(DATA$T==6)
+visit7<-as.numeric(DATA$T==7)
+visit8<-as.numeric(DATA$T==8)
+visit9<-as.numeric(DATA$T==9)
+visit10<-as.numeric(DATA$T==10)
+
+TEMAT<-cbind(visit1,visit2,visit3,visit4,visit5,visit6,visit7,visit8,visit9,visit10)
+EMAT<-t(TEMAT)
+
+Baselinepop<-apply(TEMAT,2,sum)
+
+##Solve restrictions for correct covariates
+
+TDMATAO<-t(DMATAO)
+
+gfunA<-function(w){                    ##Objective function
+lp1<-colSums(TDMATAO*w[1:14])           
+lp2<-colSums(EMAT*w[15:24])
+we<-weightsMLE*exp(lp1+lp2)            ##Create calibrated weights
+m1<-colMeans(DMATAO*we)                               ##Restrictions (7)
+m2<-(colSums(TEMAT*we)-Baselinepop)/nrow(TEMAT)     ##Restrictions (5)
+c(m1,m2)}
+
+##Hessian
+
+N1MAT<-rbind(TDMATAO,EMAT)
+N2MAT<-cbind(DMATAO,TEMAT)
+
+DgA<-function(w){
+lp1<-colSums(TDMATAO*w[1:14])           
+lp2<-colSums(EMAT*w[15:24])
+we<-weightsMLE*exp(lp1+lp2) 
+MAT<-N2MAT*we
+MAT1<-diag(24)
+for (k in 1:24){
+MAT1[,k]<-colMeans(N1MAT[k,]*MAT)}
+MAT1}
+
+weioptA<-nleqslv(rep(0,24),gfunA,DgA,method="Broyden",
+control=list(maxit=10000,ftol=10^(-16),xtol=10^(-16)))
+
+##Transform covariates
+
+TDMATAOT<-t(DMATAOT)
+
+gfunAT<-function(w){
+lp1<-colSums(TDMATAOT*w[1:14])
+lp2<-colSums(EMAT*w[15:24])
+we<-weightsMLET*exp(lp1+lp2)
+m1<-colMeans(DMATAOT*we)
+m2<-(colSums(TEMAT*we)-Baselinepop)/nrow(TEMAT)
+c(m1,m2)}
+
+N1MATT<-rbind(TDMATAOT,EMAT)
+N2MATT<-cbind(DMATAOT,TEMAT)
+
+DgAT<-function(w){
+lp1<-colSums(TDMATAOT*w[1:14])
+lp2<-colSums(EMAT*w[15:24])
+we<-weightsMLET*exp(lp1+lp2)
+MAT<-N2MATT*we
+MAT1<-diag(24)
+for (k in 1:24){
+MAT1[,k]<-colMeans(N1MATT[k,]*MAT)}
+MAT1}
+
+
+weioptAT<-nleqslv(rep(0,24),gfunAT,DgAT,method="Broyden",
+control=list(maxit=10000,ftol=10^(-16),xtol=10^(-16)))
+
+##Calibrated weight construction
+
+weconsA<-function(w){
+lp1<-colSums(TDMATAO*w[1:14])           
+lp2<-colSums(EMAT*w[15:24])
+weightsMLE*exp(lp1+lp2)}
+
+weconsAT<-function(w){
+lp1<-colSums(TDMATAOT*w[1:14])
+lp2<-colSums(EMAT*w[15:24])
+weightsMLET*exp(lp1+lp2)}
+
+CALW<-weconsA(weioptA$x)
+CALWT<-weconsAT(weioptAT$x)
+
+COEF_CALW<-lm(Y~CA0+CA1,data=DATA,weights=CALW)$coef[2:3]
+COEF_CALWT<-lm(Y~CA0+CA1,data=DATA,weights=CALWT)$coef[2:3]
+
+##Estimate gamma1 and gamma2
+
+c(cumsum(COEF_MLE),cumsum(COEF_CALW),
+cumsum(COEF_MLET),cumsum(COEF_CALWT))}
+
+
+REmat<-do.call(cbind,RE)
+
+bias<-rowMeans(REmat)-rep(c(10,20),4)
+bias
+
+variance<-apply(REmat,1,var)
+sqrt(variance)
+
+rmse<-sqrt(bias^2+variance)
+rmse
+
+
+
+       
